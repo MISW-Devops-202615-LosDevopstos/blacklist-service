@@ -1,0 +1,9 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: blacklist
+      POSTGRES_PASSWORD: blacklist
+      POSTGRES_DB: blacklist
+    ports:
+      - "5432:5432"
