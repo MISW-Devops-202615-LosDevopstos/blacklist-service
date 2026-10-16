@@ -56,7 +56,8 @@ Si el email no está: `{"is_blacklisted": false, "blocked_reason": null}`. Sin t
 |---|---|---|
 | `DATABASE_URL` | Sí | `postgresql://<usuario>:<clave>@<host>:5432/<base_de_datos>` |
 | `JWT_SECRET_KEY` | Sí | Llave para firmar y validar el token. Mínimo 32 caracteres |
-| `APP_VERSION` | No | Versión que muestra `/ping` (por defecto `1.0.0`) |
+
+La versión que muestra `/ping` no es una variable de entorno: se lee del archivo `VERSION` en la raíz del repo.
 
 Generar una llave segura:
 
@@ -111,7 +112,7 @@ Se envía en el header `Authorization: Bearer <token>`. El token solo es válido
 Generar el paquete desde la raíz del repo:
 
 ```bash
-zip -r deploy.zip application.py Procfile requirements.txt app -x "*__pycache__*"
+zip -r deploy.zip application.py Procfile requirements.txt VERSION app -x "*__pycache__*"
 ```
 
 El `.zip` incluye solo el código necesario, con los archivos en la raíz. No incluye `venv/`, `.git/`, `.env`, `postman/` ni `docker-compose.yml`.
@@ -119,12 +120,22 @@ El `.zip` incluye solo el código necesario, con los archivos en la raíz. No in
 Configuración del ambiente:
 
 - Plataforma: **Python 3.11 o superior en Amazon Linux 2023**.
-- Variables de entorno: `DATABASE_URL` (endpoint de RDS), `JWT_SECRET_KEY` y `APP_VERSION`.
+- Variables de entorno: `DATABASE_URL` (endpoint de RDS) y `JWT_SECRET_KEY`.
 - Health check del load balancer: ruta `/ping`.
 - RDS debe aceptar conexiones al puerto 5432 desde el security group de las instancias de Beanstalk.
 - El `Procfile` arranca Gunicorn en el puerto 8000, el que usa por defecto el proxy de la plataforma.
 
-En cada despliegue, cambie `APP_VERSION` para identificar con `/ping` qué instancias ya tienen la versión nueva.
+### Desplegar una versión nueva
+
+La versión viaja dentro del `.zip` (archivo `VERSION`). Así, cambiarla implica un despliegue de código y Beanstalk aplica la política de despliegue configurada (All at once, Rolling, Immutable…). Cambiar una variable de entorno, en cambio, es un cambio de configuración y no usa esa política.
+
+```bash
+echo "1.0.1" > VERSION
+git commit -am "chore: versión 1.0.1"
+zip -r deploy.zip application.py Procfile requirements.txt VERSION app -x "*__pycache__*"
+```
+
+Luego, en Beanstalk: *Cargar e implementar* → `deploy.zip` con etiqueta `v1.0.1`. Durante el despliegue, `/ping` muestra qué instancias ya responden la versión nueva.
 
 ## Estructura
 
@@ -139,6 +150,7 @@ En cada despliegue, cambie `APP_VERSION` para identificar con `/ping` qué insta
 ├── application.py       # Punto de entrada para Beanstalk/Gunicorn
 ├── generate_token.py    # Genera el token JWT estático
 ├── Procfile
+├── VERSION            # Versión que muestra /ping
 ├── requirements.txt
 ├── docker-compose.yml   # PostgreSQL para desarrollo local
 └── .env.example
