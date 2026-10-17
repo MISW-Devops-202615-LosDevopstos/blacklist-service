@@ -7,6 +7,9 @@ class Config:
     SQLALCHEMY_DATABASE_URI = os.environ.get("DATABASE_URL")
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
+    # Verifica que cada conexión del pool siga viva antes de usarla (p. ej., después de detener y reiniciar RDS)
+    SQLALCHEMY_ENGINE_OPTIONS = {"pool_pre_ping": True}
+
     # Deja que Flask-JWT-Extended responda sus errores (401) en vez de que Flask-RESTful los convierta en 500
     PROPAGATE_EXCEPTIONS = True
 
