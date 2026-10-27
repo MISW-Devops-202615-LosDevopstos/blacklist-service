@@ -1,0 +1,35 @@
+version: 0.2
+
+env:
+  variables:
+    # Evita carpetas __pycache__ que terminarían dentro del artefacto
+    PYTHONDONTWRITEBYTECODE: "1"
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.13 # misma versión que la plataforma de Beanstalk
+    commands:
+      - pip install -r requirements-dev.txt
+
+  build:
+    commands:
+      # Si una prueba falla, la fase se detiene y no se arma el artefacto
+      - pytest --junitxml=reports/pytest.xml
+      # Contenido del artefacto: los mismos archivos del zip manual de la Entrega 1
+      - mkdir -p dist/app
+      - cp application.py Procfile requirements.txt VERSION dist/
+      - cp app/*.py dist/app/
+
+reports:
+  pytest-reports:
+    files:
+      - pytest.xml
+    base-directory: reports
+    file-format: JUNITXML
+
+artifacts:
+  # Solo existe dist/ si las pruebas pasaron (UPLOAD_ARTIFACTS se intenta aunque el build falle)
+  base-directory: dist
+  files:
+    - '**/*'

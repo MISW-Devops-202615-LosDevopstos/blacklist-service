@@ -11,3 +11,8 @@ __pycache__/
 
 # Paquete de despliegue para Beanstalk (se genera, no se versiona)
 *.zip
+
+
+# Salidas del build de CI (reporte de pytest y contenido del artefacto)
+reports/
+dist/
