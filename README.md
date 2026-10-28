@@ -107,6 +107,35 @@ Se envía en el header `Authorization: Bearer <token>`. El token solo es válido
 3. Configure `base_url` (`http://localhost:8000` o la URL de Beanstalk) y pegue el token en `token`, **solo en Current/Local value**.
 4. Ejecute la colección completa con *Run collection*. Son 11 escenarios y 19 pruebas.
 
+## Pruebas unitarias
+
+Las pruebas usan pytest con SQLite en memoria, así que no necesitan Docker, RDS ni variables de entorno:
+
+```bash
+pip install -r requirements-dev.txt
+pytest -v
+```
+
+| Archivo | Escenarios |
+|---|---|
+| `tests/test_blacklists_post.py` | 8: creación válida, motivo opcional, guarda IP y fecha, email/`app_uuid`/motivo inválidos (400), sin token (401) y duplicado (409) |
+| `tests/test_blacklists_get.py` | 4: email bloqueado, no bloqueado, consulta en mayúsculas y sin token (401) |
+| `tests/test_ping.py` | 1: responde la versión sin token |
+
+`tests/conftest.py` crea una app nueva por prueba (base vacía) y un token firmado con una llave de prueba, no con la real.
+
+## Integración continua
+
+Cada commit en `main` dispara el pipeline:
+
+```
+commit a main → CodePipeline → CodeBuild (buildspec.yml) → artefacto .zip en S3
+```
+
+El `buildspec.yml` instala dependencias con Python 3.13, ejecuta `pytest`, publica el informe de pruebas en CodeBuild y arma el artefacto con los mismos archivos del despliegue manual. Si una prueba falla, el build falla y no se genera el artefacto.
+
+No hay despliegue automático (CD): el artefacto se despliega a mano en Beanstalk, como se describe abajo. Puede usarse el `.zip` que genera CodeBuild en S3 o generarlo localmente.
+
 ## Despliegue en Elastic Beanstalk
 
 Generar el paquete desde la raíz del repo:
@@ -146,12 +175,20 @@ Luego, en Beanstalk: *Cargar e implementar* → `deploy.zip` con etiqueta `v1.0.
 │   ├── models.py        # Modelo de la tabla blacklist
 │   ├── resources.py     # Endpoints
 │   └── schemas.py       # Validación de entrada
+├── tests/               # Pruebas unitarias (pytest)
+│   ├── conftest.py      # App de prueba, cliente y token
+│   ├── test_blacklists_get.py
+│   ├── test_blacklists_post.py
+│   └── test_ping.py
 ├── postman/             # Colección y environment de Postman
 ├── application.py       # Punto de entrada para Beanstalk/Gunicorn
+├── buildspec.yml        # Instrucciones de build para AWS CodeBuild
 ├── generate_token.py    # Genera el token JWT estático
 ├── Procfile
-├── VERSION            # Versión que muestra /ping
+├── VERSION              # Versión que muestra /ping
 ├── requirements.txt
+├── requirements-dev.txt # Dependencias de desarrollo (pytest)
+├── pytest.ini           # Configuración de pytest
 ├── docker-compose.yml   # PostgreSQL para desarrollo local
 └── .env.example
 ```
