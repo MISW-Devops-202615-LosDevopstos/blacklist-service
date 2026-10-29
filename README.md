@@ -136,6 +136,8 @@ El `buildspec.yml` instala dependencias con Python 3.13, ejecuta `pytest`, publi
 
 No hay despliegue automático (CD): el artefacto se despliega a mano en Beanstalk, como se describe abajo. Puede usarse el `.zip` que genera CodeBuild en S3 o generarlo localmente.
 
+El artefacto queda en el bucket de artefactos del pipeline, en la carpeta `blacklist-service-ci/BuildArtif/`. El objeto tiene un nombre aleatorio y no tiene extensión, pero es un `.zip`. Para revisarlo, se descarga y se abre con `unzip -l <archivo>`.
+
 ## Despliegue en Elastic Beanstalk
 
 Generar el paquete desde la raíz del repo:
