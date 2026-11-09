@@ -1,0 +1,55 @@
+version: 0.2
+
+env:
+  variables:
+    PYTHONDONTWRITEBYTECODE: "1"
+    IMAGE_REPO_NAME: "blacklist-service"
+    # Una sola imagen por build, sin el manifiesto de atestación adicional en ECR
+    BUILDX_NO_DEFAULT_ATTESTATIONS: "1"
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.13
+    commands:
+      - pip install -r requirements-dev.txt
+
+  pre_build:
+    commands:
+      - AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+      - REGISTRY=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+      - REPOSITORY_URI=$REGISTRY/$IMAGE_REPO_NAME
+      # Etiqueta = hash corto del commit (o fecha si no está disponible)
+      - COMMIT=$(echo "$CODEBUILD_RESOLVED_SOURCE_VERSION" | cut -c 1-7)
+      - IMAGE_TAG=${COMMIT:-$(date +%Y%m%d%H%M%S)}
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $REGISTRY
+
+  build:
+    commands:
+      # Si una prueba falla, la fase se detiene y no se construye la imagen
+      - pytest --junitxml=reports/pytest.xml
+      - docker build -t $REPOSITORY_URI:$IMAGE_TAG -t $REPOSITORY_URI:latest .
+
+  post_build:
+    commands:
+      # post_build se ejecuta aunque build falle: solo se publica la imagen si todo pasó
+      - |
+        if [ "$CODEBUILD_BUILD_SUCCEEDING" = "1" ]; then
+          docker push $REPOSITORY_URI:$IMAGE_TAG
+          docker push $REPOSITORY_URI:latest
+          printf '{"ImageURI":"%s"}' "$REPOSITORY_URI:$IMAGE_TAG" > imageDetail.json
+        fi
+
+reports:
+  pytest-reports:
+    files:
+      - pytest.xml
+    base-directory: reports
+    file-format: JUNITXML
+
+artifacts:
+  # Entradas de la etapa Deploy (CodeDeploy ECS blue/green)
+  files:
+    - imageDetail.json
+    - appspec.yaml
+    - taskdef.json
