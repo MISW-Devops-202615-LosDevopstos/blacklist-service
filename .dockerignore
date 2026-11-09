@@ -1,0 +1,11 @@
+.git
+.env
+venv/
+.venv/
+__pycache__/
+*.pyc
+tests/
+postman/
+dist/
+reports/
+*.zip
