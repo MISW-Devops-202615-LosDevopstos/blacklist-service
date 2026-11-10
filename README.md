@@ -2,9 +2,17 @@
 
 Microservicio REST para gestionar la lista negra global de emails de la organización. Las aplicaciones internas pueden agregar emails a la lista y consultar si un email está bloqueado.
 
-Entrega 1 del curso de DevOps (Universidad de los Andes): despliegue manual en AWS Elastic Beanstalk con PostgreSQL en RDS.
+Proyecto del curso de DevOps (Universidad de los Andes):
 
-**Stack:** Python 3.11+, Flask, Flask-SQLAlchemy, Flask-RESTful, Flask-Marshmallow, Flask-JWT-Extended, Werkzeug, PostgreSQL (psycopg 3) y Gunicorn.
+| Entrega | Qué agrega |
+|---|---|
+| 1 | Despliegue manual en AWS Elastic Beanstalk con PostgreSQL en RDS |
+| 2 | Pruebas unitarias e integración continua con CodePipeline y CodeBuild |
+| 3 | Contenedores: la app corre en Amazon ECS Fargate y el pipeline construye y publica la imagen en ECR |
+
+**Stack:** Python 3.13, Flask, Flask-SQLAlchemy, Flask-RESTful, Flask-Marshmallow, Flask-JWT-Extended, Werkzeug, PostgreSQL (psycopg 3), Gunicorn y Docker.
+
+**AWS (región us-east-2):** RDS, ECR, ECS Fargate, Application Load Balancer, Systems Manager Parameter Store, CodePipeline, CodeBuild y Elastic Beanstalk.
 
 ## Endpoints
 
@@ -47,7 +55,7 @@ Si el email no está: `{"is_blacklisted": false, "blocked_reason": null}`. Sin t
 **GET /ping**
 
 ```json
-{"status": "ok", "version": "1.0.0"}
+{"status": "ok", "version": "1.0.4"}
 ```
 
 ## Variables de entorno
@@ -67,28 +75,42 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 Si falta una variable obligatoria, la app no arranca y muestra cuál falta. La tabla `blacklist` se crea automáticamente al iniciar.
 
+En AWS las variables nunca van en texto plano en el repositorio: Fargate las lee de Parameter Store (ver [Despliegue en ECS Fargate](#despliegue-en-ecs-fargate)).
+
 ## Correr en local
 
-Requisitos: Python 3.11+, Docker.
+Requisitos: Python 3.11+ y Docker. Primero, la base de datos y las variables:
 
 ```bash
-# 1. Base de datos PostgreSQL
-docker compose up -d
-
-# 2. Entorno virtual y dependencias
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
-# 3. Variables de entorno (completar JWT_SECRET_KEY en .env)
-cp .env.example .env
-set -a; source .env; set +a
-
-# 4. Servidor
-gunicorn --bind :8000 --workers 2 application:application
+docker compose up -d              # PostgreSQL local
+cp .env.example .env              # completar JWT_SECRET_KEY
 ```
 
 Si el puerto 5432 está ocupado por otro contenedor, deténgalo o cambie el puerto en `docker-compose.yml` y en `DATABASE_URL`.
+
+### Con Python
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+set -a; source .env; set +a
+gunicorn --bind :8000 --workers 2 application:application
+```
+
+### Con Docker (la misma imagen que corre en Fargate)
+
+```bash
+docker build -t blacklist-service .
+docker run --rm -p 8000:8000 --env-file .env \
+  -e DATABASE_URL=postgresql://blacklist:blacklist@host.docker.internal:5432/blacklist \
+  --add-host=host.docker.internal:host-gateway \
+  blacklist-service
+```
+
+Se sobrescribe `DATABASE_URL` porque dentro del contenedor `localhost` es el propio contenedor; `host.docker.internal` apunta al equipo donde corre el PostgreSQL de docker compose.
+
+La imagen parte de `python:3.13-slim` (desde ECR Public, para evitar los límites de descarga de Docker Hub), instala solo `requirements.txt`, copia `application.py`, `VERSION` y `app/`, y corre Gunicorn en el puerto 8000 con un usuario sin privilegios. `.dockerignore` garantiza que `.env`, las pruebas y la colección de Postman no entren a la imagen.
 
 ## Token de autenticación
 
@@ -104,7 +126,10 @@ Se envía en el header `Authorization: Bearer <token>`. El token solo es válido
 
 1. Importe los dos archivos de `postman/` (colección y environment).
 2. Seleccione el environment **Blacklist Service**.
-3. Configure `base_url` (`http://localhost:8000` o la URL de Beanstalk) y pegue el token en `token`, **solo en Current/Local value**.
+3. Configure `base_url` y pegue el token en `token`, **solo en Current/Local value**:
+   - Local: `http://localhost:8000`
+   - Fargate: `http://blacklist-alb-1344505848.us-east-2.elb.amazonaws.com`
+   - Beanstalk: `http://Blacklist-service-env.eba-hteiwdmm.us-east-2.elasticbeanstalk.com`
 4. Ejecute la colección completa con *Run collection*. Son 11 escenarios y 19 pruebas.
 
 ## Pruebas unitarias
@@ -126,19 +151,83 @@ pytest -v
 
 ## Integración continua
 
-Cada commit en `main` dispara el pipeline:
+Cada commit en `main` dispara dos pipelines, que comparten la conexión con GitHub y las mismas pruebas:
+
+| Pipeline | Buildspec | Qué produce |
+|---|---|---|
+| `blacklist-service-ecs` (actual) | `buildspec-ecs.yml` | Imagen Docker en ECR + archivos para el despliegue en Fargate |
+| `blacklist-service-ci` (entrega 2) | `buildspec.yml` | `.zip` para Beanstalk en S3 |
+
+### Pipeline de contenedores (`blacklist-service-ecs`)
 
 ```
-commit a main → CodePipeline → CodeBuild (buildspec.yml) → artefacto .zip en S3
+commit a main → CodePipeline → CodeBuild (buildspec-ecs.yml) → imagen en ECR + artefacto en S3
 ```
 
-El `buildspec.yml` instala dependencias con Python 3.13, ejecuta `pytest`, publica el informe de pruebas en CodeBuild y arma el artefacto con los mismos archivos del despliegue manual. Si una prueba falla, el build falla y no se genera el artefacto.
+| Fase | Qué hace |
+|---|---|
+| `install` | Python 3.13 e instala `requirements-dev.txt` |
+| `pre_build` | Calcula la dirección de ECR, define la etiqueta (hash corto del commit) e inicia sesión en ECR |
+| `build` | Corre `pytest`; si una prueba falla, la fase se detiene y no se construye la imagen. Si pasan, `docker build` con las etiquetas `<hash>` y `latest` |
+| `post_build` | Solo si todo pasó: `docker push` de las dos etiquetas y genera `imageDetail.json` |
 
-No hay despliegue automático (CD): el artefacto se despliega a mano en Beanstalk, como se describe abajo. Puede usarse el `.zip` que genera CodeBuild en S3 o generarlo localmente.
+Salidas:
 
-El artefacto queda en el bucket de artefactos del pipeline, en la carpeta `blacklist-service-ci/BuildArtif/`. El objeto tiene un nombre aleatorio y no tiene extensión, pero es un `.zip`. Para revisarlo, se descarga y se abre con `unzip -l <archivo>`.
+- **Imagen** en ECR: `477139660273.dkr.ecr.us-east-2.amazonaws.com/blacklist-service:<hash>` (y `latest`).
+- **Informe de pruebas** en CodeBuild (grupo `blacklist-service-ecs-build-pytest-reports`).
+- **Artefacto** en S3 (`blacklist-service-ec/BuildArtif/`) con `imageDetail.json`, `appspec.yaml` y `taskdef.json`, las entradas de la etapa de despliegue con CodeDeploy.
 
-## Despliegue en Elastic Beanstalk
+El proyecto de CodeBuild (`blacklist-service-ecs-build`) corre en modo **privilegiado** (necesario para Docker) y su rol tiene permiso para subir imágenes solo al repositorio `blacklist-service` de ECR.
+
+### Pipeline de la entrega 2 (`blacklist-service-ci`)
+
+Instala dependencias, ejecuta `pytest`, publica el informe de pruebas y arma un `.zip` con los mismos archivos del despliegue manual en Beanstalk. Si una prueba falla, no se genera el artefacto. El `.zip` queda en `blacklist-service-ci/BuildArtif/`, con nombre aleatorio y sin extensión; se revisa con `unzip -l <archivo>`.
+
+## Despliegue en ECS Fargate
+
+```
+Internet → (80) ALB blacklist-alb → (8000) tarea Fargate → (5432) RDS PostgreSQL
+```
+
+| Recurso | Nombre |
+|---|---|
+| Repositorio ECR | `blacklist-service` |
+| Cluster / servicio | `blacklist-cluster` / `blacklist-svc` (1 tarea, controlador de despliegue `CODE_DEPLOY`) |
+| Task definition | `blacklist-task` (Fargate, 0.25 vCPU / 0.5 GB, contenedor `blacklist-service` en el puerto 8000) |
+| Load balancer | `blacklist-alb`, agente HTTP:80 |
+| Target groups | `blacklist-tg-blue` (en uso) y `blacklist-tg-green` (para blue/green), health check en `/ping` |
+| Secretos | Parameter Store: `/blacklist/DATABASE_URL` y `/blacklist/JWT_SECRET_KEY` (SecureString) |
+| Rol de ejecución | `ecsTaskExecutionRole`, con permiso para leer solo `/blacklist/*` |
+| Logs | CloudWatch, grupo `/ecs/blacklist-service` (retención de 1 semana) |
+
+Seguridad de red:
+
+- `blacklist-alb-sg`: entrada 80 desde internet.
+- `blacklist-tasks-sg`: entrada 8000 solo desde `blacklist-alb-sg`.
+- `blacklist-db-sg` (RDS): entrada 5432 desde `blacklist-tasks-sg` (y desde las instancias de Beanstalk).
+
+La tarea recibe `DATABASE_URL` y `JWT_SECRET_KEY` como `secrets` con `valueFrom`: ECS las lee de Parameter Store al arrancar, así que la task definition solo contiene los ARN de los parámetros, nunca los valores.
+
+### Archivos para el despliegue continuo
+
+| Archivo | Para qué sirve |
+|---|---|
+| `taskdef.json` | Task definition de la app. La imagen es el marcador `<IMAGE1_NAME>`, que el pipeline reemplaza por la imagen recién construida |
+| `appspec.yaml` | Instrucciones para CodeDeploy: usa `<TASK_DEFINITION>` (la revisión nueva) y conecta el contenedor `blacklist-service` en el puerto 8000 al load balancer |
+| `imageDetail.json` | Lo genera el build con la dirección de la imagen publicada |
+
+### Publicar una imagen a mano
+
+Requiere la AWS CLI configurada (`aws login`) con la región `us-east-2`:
+
+```bash
+aws ecr get-login-password --region us-east-2 | docker login --username AWS --password-stdin 477139660273.dkr.ecr.us-east-2.amazonaws.com
+docker build -t blacklist-service .
+docker tag blacklist-service:latest 477139660273.dkr.ecr.us-east-2.amazonaws.com/blacklist-service:latest
+docker push 477139660273.dkr.ecr.us-east-2.amazonaws.com/blacklist-service:latest
+```
+
+## Despliegue en Elastic Beanstalk (entregas 1 y 2)
 
 Generar el paquete desde la raíz del repo:
 
@@ -150,7 +239,7 @@ El `.zip` incluye solo el código necesario, con los archivos en la raíz. No in
 
 Configuración del ambiente:
 
-- Plataforma: **Python 3.11 o superior en Amazon Linux 2023**.
+- Plataforma: **Python 3.13 en Amazon Linux 2023**.
 - Variables de entorno: `DATABASE_URL` (endpoint de RDS) y `JWT_SECRET_KEY`.
 - Health check del load balancer: ruta `/ping`.
 - RDS debe aceptar conexiones al puerto 5432 desde el security group de las instancias de Beanstalk.
@@ -183,10 +272,15 @@ Luego, en Beanstalk: *Cargar e implementar* → `deploy.zip` con etiqueta `v1.0.
 │   ├── test_blacklists_post.py
 │   └── test_ping.py
 ├── postman/             # Colección y environment de Postman
-├── application.py       # Punto de entrada para Beanstalk/Gunicorn
-├── buildspec.yml        # Instrucciones de build para AWS CodeBuild
+├── application.py       # Punto de entrada para Gunicorn
+├── Dockerfile           # Imagen de la app para ECS Fargate
+├── .dockerignore        # Lo que no entra a la imagen (.env, pruebas, Postman…)
+├── buildspec-ecs.yml    # Build del pipeline de contenedores (pruebas + imagen en ECR)
+├── taskdef.json         # Task definition para el despliegue en Fargate
+├── appspec.yaml         # Instrucciones para CodeDeploy (blue/green)
+├── buildspec.yml        # Build del pipeline de la entrega 2 (.zip para Beanstalk)
+├── Procfile             # Arranque en Beanstalk
 ├── generate_token.py    # Genera el token JWT estático
-├── Procfile
 ├── VERSION              # Versión que muestra /ping
 ├── requirements.txt
 ├── requirements-dev.txt # Dependencias de desarrollo (pytest)
@@ -203,6 +297,6 @@ Se usa [Conventional Commits](https://www.conventionalcommits.org/) con la descr
 <tipo>(<alcance opcional>): <descripción>
 ```
 
-Tipos: `feat`, `fix`, `docs`, `test`, `chore`, `refactor`, `build`. Ejemplo: `feat(api): agrega endpoint POST /blacklists`.
+Tipos: `feat`, `fix`, `docs`, `test`, `chore`, `refactor`, `build`, `ci`. Ejemplo: `feat(api): agrega endpoint POST /blacklists`.
 
 Flujo de trabajo: ramas `feature/...` y Pull Request hacia `main` con al menos una aprobación.
