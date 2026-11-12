@@ -34,6 +34,7 @@ phases:
     commands:
       # post_build se ejecuta aunque build falle: solo se publica la imagen si todo pasó
       - |
+        set -e
         if [ "$CODEBUILD_BUILD_SUCCEEDING" = "1" ]; then
           docker push $REPOSITORY_URI:$IMAGE_TAG
           docker push $REPOSITORY_URI:latest
