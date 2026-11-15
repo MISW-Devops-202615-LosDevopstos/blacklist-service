@@ -34,7 +34,7 @@ class BlacklistResource(Resource):
             db.session.rollback()
             return {"msg": "El email ya está en la lista negra"}, 409
 
-        return {"msg": "Email agregado a la lista negra"}, 200
+        return {"msg": "Email agregado a la lista negra"}, 201
 
 
 class BlacklistDetailResource(Resource):
