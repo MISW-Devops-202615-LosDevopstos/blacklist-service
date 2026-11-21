@@ -1,3 +1,4 @@
+import newrelic.agent
 from flask import current_app, request
 from flask_jwt_extended import jwt_required
 from flask_restful import Resource
@@ -50,4 +51,6 @@ class BlacklistDetailResource(Resource):
 
 class PingResource(Resource):
     def get(self):
+        # El health check del load balancer no cuenta como tráfico en New Relic (no-op si el agente no está activo)
+        newrelic.agent.ignore_transaction()
         return {"status": "ok", "version": current_app.config["APP_VERSION"]}, 200
