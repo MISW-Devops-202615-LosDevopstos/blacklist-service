@@ -2,7 +2,9 @@
   "family": "blacklist-task",
   "executionRoleArn": "arn:aws:iam::477139660273:role/ecsTaskExecutionRole",
   "networkMode": "awsvpc",
-  "requiresCompatibilities": ["FARGATE"],
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
   "cpu": "256",
   "memory": "512",
   "runtimePlatform": {
@@ -23,6 +25,12 @@
           "appProtocol": "http"
         }
       ],
+      "environment": [
+        {
+          "name": "NEW_RELIC_APP_NAME",
+          "value": "blacklist-service-fargate"
+        }
+      ],
       "secrets": [
         {
           "name": "DATABASE_URL",
@@ -31,6 +39,10 @@
         {
           "name": "JWT_SECRET_KEY",
           "valueFrom": "arn:aws:ssm:us-east-2:477139660273:parameter/blacklist/JWT_SECRET_KEY"
+        },
+        {
+          "name": "NEW_RELIC_LICENSE_KEY",
+          "valueFrom": "arn:aws:ssm:us-east-2:477139660273:parameter/blacklist/NEW_RELIC_LICENSE_KEY"
         }
       ],
       "logConfiguration": {
