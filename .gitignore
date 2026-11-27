@@ -16,3 +16,6 @@ __pycache__/
 # Salidas del build de CI (reporte de pytest y contenido del artefacto)
 reports/
 dist/
+
+# Resultados de las pruebas de estrés (JMeter)
+pruebas-estres/resultados/
